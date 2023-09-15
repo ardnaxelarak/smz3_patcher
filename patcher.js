@@ -1,3 +1,20 @@
+$(function() {
+  $(".submit-btn").prop("disabled", true);
+  $.ajaxSetup({
+    beforeSend: function (jqXHR, settings) {
+      if (settings.dataType === 'binary')
+        settings.xhr = () => $.extend(new window.XMLHttpRequest(), {responseType:'arraybuffer'})
+    }
+  });
+  $(".patch").on("change", async function() {
+    await download_patch($(this).data("filename"));
+  });
+  $(".submit-btn").on("click", submit);
+  $("#romInput").on("change", function() {
+    $(".submit-btn").prop("disabled", $(this).prop('files').length == 0);
+  });
+});
+
 function apply_patch(patch, rom, transformer) {
   const header = 5;
   const footer = 3;
@@ -5,7 +22,6 @@ function apply_patch(patch, rom, transformer) {
   while (pos + footer < patch.length) {
     const offset = (patch[pos++] << 16) | (patch[pos++] << 8) | patch[pos++];
     const trOffset = transformer(offset);
-    console.log(offset.toString(16) + " : " + trOffset.toString(16));
     var size = (patch[pos++] << 8) | patch[pos++];
     if (size > 0) {
       rom.set(patch.subarray(pos, pos + size), trOffset);
@@ -32,7 +48,7 @@ function translate_sm_offset(offset) {
   return baseOffset + (i * 0x8000);
 }
 
-function read_file(file) {
+async function read_file(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -42,16 +58,41 @@ function read_file(file) {
   });
 }
 
+const patchMap = {};
+
+async function download_patch(filename) {
+  if (!patchMap[filename]) {
+    patchMap[filename] = await $.ajax({
+      url: filename,
+      type: "GET",
+      dataType: "binary",
+    }).then(function (response) {
+      const data = new Uint8Array(response);
+      return data;
+    });
+  }
+  return patchMap[filename];
+}
+
 async function submit() {
-  const patchFile = document.getElementById('patchInput').files[0];
-  const patch = await read_file(patchFile);
   const romFile = document.getElementById('romInput').files[0];
   const rom = await read_file(romFile);
 
-  apply_patch(patch, rom, translate_sm_offset);
+  for (const p of $(".sm-patch:checked")) {
+    const $patch = $(p);
+    const patch = await download_patch($patch.data('filename'));
+    apply_patch(patch, rom, translate_sm_offset);
+  }
+
+  const customPatches = document.getElementById('patchInput').files;
+  for (const patchFile of customPatches) {
+    const patch = await read_file(patchFile);
+    apply_patch(patch, rom, translate_sm_offset);
+  }
+
   const blob = new Blob([rom], { type: 'octet/stream' });
   const link = document.getElementById('downloader');
   link.href = URL.createObjectURL(blob);
-  link.download = romFile.name;
+  link.download = romFile.name.replace(/\.sfc$/, "") + "_patched.sfc";
   link.click();
 }
